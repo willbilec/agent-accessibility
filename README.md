@@ -15,8 +15,16 @@ Grab the latest `.nvda-addon` from the [**Releases**](../../releases) page. The 
 
 ## Install
 
-1. Download `agentDesktopAccessibility-2.1.0.nvda-addon` from the latest release.
-2. In NVDA: <kbd>NVDA</kbd>+<kbd>N</kbd> → **Tools** → **Manage Add-ons** → **Install**.
+Two equivalent ways to install the add-on on NVDA 2024.1 or later:
+
+**Option A — open the file directly**
+
+Double-click `agentDesktopAccessibility-2.1.0.nvda-addon` in your file manager (or open it from your browser's downloads). NVDA will detect the add-on and offer to install it.
+
+**Option B — from the Add-on Store**
+
+1. In NVDA: <kbd>NVDA</kbd>+<kbd>N</kbd> → **Tools** → **Add-on Store**.
+2. Open the add-on store menu and choose **Install from External Source**.
 3. Select the downloaded `.nvda-addon` file.
 4. Restart NVDA when prompted.
 
