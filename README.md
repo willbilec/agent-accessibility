@@ -67,11 +67,11 @@ These pass through when Hermes is the foreground app.
 
 ## Hotkeys (Hermes only)
 
-These pass through when OpenCode is the foreground app. Preserved from `hermesAccessibility` 1.7.2.
+These fire only when Hermes is the foreground app. In OpenCode (or any other app) they pass through to the OS or to NVDA's default handling. Preserved from `hermesAccessibility` 1.7.2.
 
 | Gesture | Action |
 | --- | --- |
-| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> | Open `@` reference picker dialog |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> | Open the Hermes `@` reference picker |
 | <kbd>NVDA</kbd>+<kbd>Shift</kbd>+<kbd>H</kbd> | Toggle Hermes speech filter (silence status spam) |
 | <kbd>NVDA</kbd>+<kbd>Shift</kbd>+<kbd>J</kbd> | Hermes speech filter status + suppression count |
 
