@@ -1,0 +1,63 @@
+# --- agent runtime state (local-only, never committed) ---
+.graymatter/
+*.pid
+*.addr
+*.log
+*.db
+
+# --- Python build / cache artifacts ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# --- NVDA add-on build artifacts (built by build_addon.py, published as Releases) ---
+*.nvda-addon
+
+# --- Node / Electron (patch_app_asar.js + any future deps) ---
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+package-lock.json
+yarn.lock
+pnpm-lock.yaml
+
+# --- Editor / OS junk ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+ehthumbs.db
+$RECYCLE.BIN/
+
+# --- Secrets / local config ---
+.env
+.env.local
+*.local
+
+# --- Windows-specific ---
+*.lnk
+[Ii]nstaller/
+Installer/
