@@ -2,16 +2,17 @@
 
 > **Status: WORK IN PROGRESS.** This add-on is functional but still being polished. Hotkeys, foreground routing, and the Hermes `app.asar` patcher all work, but expect rough edges: the session picker dialog is unstyled, the diagnostic dump is verbose, the speech filter regex set is not exhaustive, and the auto-read behavior in OpenCode may stutter on long messages. Do not rely on this for production screen-reader use without testing your specific workflow first. Please file issues for anything that gets in your way.
 
-An [NVDA](https://www.nvaccess.org/) screen-reader add-on that improves accessibility of two desktop apps:
+An [NVDA](https://www.nvaccess.org/) screen-reader add-on that improves accessibility of three desktop apps:
 
 - **Hermes Agent** (Electron)
 - **OpenCode Desktop** (Electron)
+- **ChatGPT Desktop — consumer Chat and the Codex workspace**
 
-The add-on is **foreground-aware**: the same hotkey does the right thing in each app, with no double-bindings and no conflicts. It is a merge of the previous `hermesAccessibility` and `opencodeAccessibility` add-ons.
+The add-on routes shared commands to the focused agent app. Codex transcript reading and active-task cycling remain available from other applications through NVDA's local buffer. It merges the previous `hermesAccessibility`, `opencodeAccessibility`, and `codexAccessibility` add-ons.
 
 ## Download
 
-Grab the latest `.nvda-addon` from the [**Releases**](../../releases) page. The current build is **v2.1.0**.
+Grab the latest `.nvda-addon` from the [**Releases**](../../releases) page. The current build is **v2.8.8**.
 
 ## Install
 
@@ -19,7 +20,7 @@ Two equivalent ways to install the add-on on NVDA 2024.1 or later:
 
 **Option A — open the file directly**
 
-Double-click `agentDesktopAccessibility-2.1.0.nvda-addon` in your file manager (or open it from your browser's downloads). NVDA will detect the add-on and offer to install it.
+Double-click `agentDesktopAccessibility-2.8.8.nvda-addon` in your file manager (or open it from your browser's downloads). NVDA will detect the add-on and offer to install it.
 
 **Option B — from the Add-on Store**
 
@@ -28,19 +29,20 @@ Double-click `agentDesktopAccessibility-2.1.0.nvda-addon` in your file manager (
 3. Select the downloaded `.nvda-addon` file.
 4. Restart NVDA when prompted.
 
-> **Upgrade note:** if you have the legacy `hermesAccessibility` or `opencodeAccessibility` add-ons installed, disable them first. Both can be uninstalled once you've confirmed the merged add-on works.
+> **Upgrade note:** if you have the legacy `hermesAccessibility`, `opencodeAccessibility`, or `codexAccessibility` add-ons installed, disable them first. They can be uninstalled once you've confirmed the merged add-on works.
 
 ## How foreground routing works
 
 Every shared gesture in the tables below checks which app is currently focused:
 
 - **Hermes focused** — calls the Hermes backend (`state.db`, `hermes://session/<id>` deep links, status suppression, `@` picker).
-- **OpenCode focused** — calls the OpenCode backend (`opencode.db`, `opencode://open-project?directory=...` deep links, auto-read, thinking trace).
-- **Neither focused** — the gesture passes through (`gesture.send()`), so it can be handled by other apps or NVDA itself.
+- **OpenCode focused** — calls the OpenCode backend (`opencode.db`, `opencode://open-project?directory=<dir>` deep links, auto-read, thinking trace).
+- **ChatGPT focused** — calls the Codex backend (`%USERPROFILE%\.codex`, `codex://` links, active-task and project/task pickers, transcript navigation, and usage limits).
+- **Neither focused** — message-reading commands use the selected Codex transcript buffer. Left/right changes that NVDA buffer without changing or focusing ChatGPT. Unrelated foreground-specific gestures still pass through.
 
-App-specific gestures (e.g. <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> for the OpenCode thinking trace) only fire when that app is the foreground. They pass through everywhere else.
+App-specific gestures are routed by foreground. For example, <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> opens active tasks in ChatGPT Codex and reads the thinking trace in OpenCode.
 
-## Hotkeys (shared — Hermes or OpenCode)
+## Hotkeys (shared — Hermes, OpenCode, or ChatGPT Codex)
 
 | Gesture | Action |
 | --- | --- |
@@ -56,14 +58,44 @@ App-specific gestures (e.g. <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> for the 
 | <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> | Diagnostic dump |
 | <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>D</kbd> | Foreground window metadata (always on) |
 
-## Hotkeys (OpenCode only)
+In ChatGPT, <kbd>Ctrl</kbd>+<kbd>N</kbd> passes through to the app's native new-task command. The shared session picker and session-cycle commands operate on Codex projects and tasks.
 
-These pass through when Hermes is the foreground app.
+## Hotkeys (ChatGPT only)
+
+These preserve the original Codex Accessibility shortcuts. Transcript reading and left/right task cycling work from any app. The project and active-task pickers are also available whether ChatGPT is open or closed. If it is open, choosing an item restores it before navigation. If it is closed, the add-on starts ChatGPT, waits for its verified desktop window and renderer, then applies the selected project/task link. Other foreground-specific commands pass through outside ChatGPT, and usage-limit reporting remains available from any app.
+
+| Gesture | Action |
+| --- | --- |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Enter</kbd> | In consumer **Chat**, open an accessible multiline prompt, send it through the signed-in ChatGPT app, wait for completion, and read the response. This deliberately refuses to run from Work or Codex. |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Right</kbd> | Next running or seven-day-recent Codex task. When ChatGPT is focused, synchronize from the task actually shown and open the next task; otherwise change only NVDA's message buffer. |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Left</kbd> | Previous running or seven-day-recent Codex task. When ChatGPT is focused, synchronize from the task actually shown and open the previous task; otherwise change only NVDA's message buffer. |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>C</kbd> | Open an accessible mirror of the ChatGPT application menus |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>P</kbd> | Open the Codex project and task picker (same result as the shared session-picker command) |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | Open the active Codex task dialog |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> | Report current 5-hour and weekly Codex usage limits plus banked usage resets; press twice to offer to use one (available globally) |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Space</kbd> | Re-read the current Codex transcript message |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd> | Toggle Auto-Read of collapsed activity summaries, commentary, and final responses from every active Codex task |
+
+### Driving consumer Chat
+
+Open **Quick chat** in the ChatGPT desktop app, then press <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>Enter</kbd>. Type a message in NVDA's dialog and choose **OK**. The add-on finds the consumer composer by its accessible name, types without changing the clipboard, activates the accessible **Send** button, watches the rendered conversation while ChatGPT is responding, announces each new assistant activity card (for example, “Implementing deduplicated chat activity announcements”), and speaks the stable completed answer.
+
+This uses the ordinary signed-in ChatGPT Chat surface and synced chat history. It does not call Codex, read `.codex` task logs, require an API key, or patch the ChatGPT application. If a draft already exists in the Chat composer, the add-on refuses to overwrite it.
+
+### ChatGPT Codex usage and banked resets
+
+Press <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> once to hear the current 5-hour and weekly limits and the number of banked usage resets available. Press it twice quickly to check the balance and open a confirmation dialog. A reset is never used merely by pressing the command twice: the dialog defaults to **No**, and the add-on redeems a reset only after you choose **Yes**. After redemption, the add-on refreshes and reports the limits again.
+
+Codex always announces “Codex task finished” when a task reaches its final response, even when Auto-Read is off or ChatGPT is not focused. While Auto-Read is on, activity, commentary, and responses from every active top-level task are read globally; there is no foreground or remembered-window gate. Each update is queued as a separate NVDA-priority utterance so one task cannot hide another later in a combined message. It identifies every announcement by task. While Codex is working, Auto-Read speaks the text represented by its collapsed activity button as “Codex activity” without expanding or clicking the item. Archived tasks and internal subagent transcripts are excluded.
+
+## Hotkeys (OpenCode, plus routed Codex Auto-Read)
+
+These pass through when Hermes is the foreground app. <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> is foreground-routed and opens active tasks when ChatGPT is focused.
 
 | Gesture | Action |
 | --- | --- |
 | <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> | Read thinking trace for current assistant message |
-| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd> | Toggle auto-read of new assistant messages |
+| <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd> | Toggle auto-read of new assistant messages in OpenCode or ChatGPT Codex |
 
 ## Hotkeys (Hermes only)
 
@@ -100,9 +132,14 @@ Hermes repeatedly announces *thinking* / *running* / spinner characters / timers
 ### Session switching
 
 - **Hermes** — uses the `hermes://session/<id>` deep-link protocol, auto-patched into `app.asar` the first time you use it, and re-applied automatically (with audible failure announcements) if Hermes updates and overwrites the patch.
-- **OpenCode** — uses the `opencode://open-project?directory=...` deep link.
+- **OpenCode** — uses the native `opencode://open-project?directory=<dir>` deep-link protocol that OpenCode supports out of the box. The session picker lands on the picked **project**; within a multi-session project it lands on whatever the project auto-opens to (most-recent session), since the add-on no longer patches OpenCode's `app.asar` to add a per-session route. (A `patch_opencode_asar.js` script that used to do this was removed in 2.4.0 because it destabilized the OpenCode renderer.)
+- **ChatGPT Codex** — reads projects and tasks from `%USERPROFILE%\.codex` and opens selections with the existing `codex://new` and `codex://threads/<id>` routes.
 
-Both protocols route through the running app's existing IPC — no second process is spawned, no keystroke simulation is needed.
+### ChatGPT Codex active tasks
+
+Press <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> while ChatGPT is focused to open a one-pane list of current Codex tasks, newest first. “Active” here means top-level tasks that have not been archived; internal subagent threads are excluded. Each entry includes its project name. Press <kbd>Enter</kbd> or choose **Open Task** to switch to it, or use **Refresh** while the dialog is open.
+
+All three protocols route through the running app's existing IPC — no second process is spawned, no keystroke simulation is needed.
 
 ### Self-healing Hermes `app.asar` patcher (2.1.0)
 
@@ -121,6 +158,8 @@ The proper long-term fix is for Hermes' `handleDeepLink` to route `kind=session`
 - **NVDA** 2024.1 or later (tested on 2026.1)
 - **Hermes Agent** desktop app (Electron) — speech filter, message nav, session switching, `@` picker
 - **OpenCode Desktop** — message nav, session switching, auto-read, thinking trace
+- **ChatGPT Desktop** (`ChatGPT.exe`, visible window title `ChatGPT`) — consumer Chat sending/response reading plus Codex menus, active tasks, projects/tasks, transcript nav, and usage limits. Consumer Chat support targets the current English accessible labels `Message ChatGPT`, `Send`, and `ChatGPT is responding`; other display languages may need additional label mappings. The Microsoft Store package and Codex integration surfaces still use the `OpenAI.Codex`, `.codex`, `codex`, and `codex://` names.
+- **Codex CLI 0.141.0 or later, signed in with the same ChatGPT account**, for banked-reset counts and redemption. Version 0.144.0 or later is recommended so the add-on can select the earliest-expiring reset and describe its title and expiration.
 
 ## Repository layout
 
@@ -129,7 +168,7 @@ addon/                  # NVDA add-on source (manifest.ini + Python modules)
   manifest.ini
   appModules/Hermes.py
   globalPlugins/agentDesktopAccessibility.py
-  globalPlugins/addtl/  # backends, router, completion, speech filter
+  globalPlugins/addtl/  # Hermes, OpenCode, and ChatGPT Codex backends plus router/helpers
 buildVars.py            # build metadata (name + version)
 build_addon.py          # builds the .nvda-addon zip from addon/
 patch_app_asar.js       # Hermes app.asar patcher (bundled in the .nvda-addon)

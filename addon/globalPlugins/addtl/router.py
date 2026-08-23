@@ -4,14 +4,15 @@
 # Foreground-aware dispatcher helper for agentDesktopAccessibility.
 #
 # The dispatcher in agentDesktopAccessibility.py calls route() to decide
-# which backend (Hermes or OpenCode) should handle a given keystroke.
+# which backend (Hermes, OpenCode, or ChatGPT Codex) should handle a
+# given keystroke.
 #
 # IMPORTANT: this file is intentionally NOT a plugin (no GlobalPlugin class).
 # It exists purely as a helper module that the dispatcher imports. NVDA's
 # plugin loader will try to register it as a plugin and log an
 # AttributeError on every startup; that's noise, not breakage.
 #
-# Returns 'hermes', 'opencode', or None (neither app is foreground).
+# Returns 'hermes', 'opencode', 'chatgpt', or None.
 #
 # Caches the result for 250ms to avoid hammering the UI Automation
 # tree on every keystroke.
@@ -24,6 +25,7 @@ _CACHE_TTL = 0.25  # seconds
 _last_check = 0.0
 _last_hermes = False
 _last_opencode = False
+_last_chatgpt = False
 
 
 def _now():
@@ -33,10 +35,11 @@ def _now():
 def reset_cache():
     """Clear the foreground cache. Useful for tests or when an event hook
     definitively knows the foreground changed."""
-    global _last_check, _last_hermes, _last_opencode
+    global _last_check, _last_hermes, _last_opencode, _last_chatgpt
     _last_check = 0.0
     _last_hermes = False
     _last_opencode = False
+    _last_chatgpt = False
 
 
 def is_hermes():
@@ -67,21 +70,50 @@ def is_opencode():
     return _last_opencode
 
 
+def is_chatgpt():
+    """True for the ChatGPT desktop application that hosts Codex.
+
+    Current builds use ChatGPT.exe and a ``ChatGPT`` window title while the
+    Microsoft Store package is still named ``OpenAI.Codex``.  Detection is
+    therefore based on the NVDA app module/process identity, not the title
+    alone (which could otherwise match a ChatGPT browser tab).
+    """
+    global _last_check, _last_chatgpt
+    now = _now()
+    if now - _last_check < _CACHE_TTL and _last_check > 0:
+        return _last_chatgpt
+    _refresh()
+    return _last_chatgpt
+
+
 def route():
-    """Return 'hermes', 'opencode', or None."""
+    """Return the backend name for the foreground agent desktop app."""
     if is_hermes():
         return 'hermes'
     if is_opencode():
         return 'opencode'
+    if is_chatgpt():
+        return 'chatgpt'
     return None
+
+
+def route_message_command():
+    """Route message navigation, falling back to Codex's local buffer.
+
+    Hermes and OpenCode retain foreground precedence.  In every other app,
+    the shared message commands operate on the selected Codex transcript so
+    the user can read it without returning focus to ChatGPT.
+    """
+    return route() or 'chatgpt'
 
 
 def _refresh():
     """Recompute both flags from the current foreground object."""
-    global _last_check, _last_hermes, _last_opencode
+    global _last_check, _last_hermes, _last_opencode, _last_chatgpt
     _last_check = _now()
     _last_hermes = False
     _last_opencode = False
+    _last_chatgpt = False
     try:
         fg = api.getForegroundObject()
     except Exception:
@@ -97,6 +129,7 @@ def _refresh():
     am = getattr(fg, 'appModule', None)
     app_name = ''
     product_name = ''
+    app_path = ''
     if am is not None:
         try:
             app_name = (getattr(am, 'appName', '') or '').lower()
@@ -106,6 +139,10 @@ def _refresh():
             product_name = (getattr(am, 'productName', '') or '').lower()
         except Exception:
             product_name = ''
+        try:
+            app_path = (getattr(am, 'appPath', '') or '').lower()
+        except Exception:
+            app_path = ''
 
     if 'hermes' in app_name:
         _last_hermes = True
@@ -138,7 +175,7 @@ def _refresh():
         except Exception:
             process_path = ''
 
-    fields = (title, class_name, acc_name, app_name, product_name, process_path)
+    fields = (title, class_name, acc_name, app_name, product_name, process_path, app_path)
     for needle in ('opencode', 'open code', 'opencode-desktop'):
         for field in fields:
             if field and needle in field:
@@ -150,4 +187,21 @@ def _refresh():
     # via the title as a last resort.
     if title and 'opencode' in title:
         _last_opencode = True
+        return
+
+    # ChatGPT/Codex detection. Do not use the window title as an independent
+    # signal: a browser tab can also be titled ChatGPT. The app module and
+    # executable path are stable NVDA-facing identifiers.
+    desktop_fields = (app_name, product_name, process_path, app_path)
+    if any('chatgpt' in field for field in desktop_fields if field):
+        _last_chatgpt = True
+        return
+    if app_name == 'codex' or any(
+        field.endswith('\\codex.exe') or field.endswith('/codex.exe')
+        for field in (process_path, app_path) if field
+    ):
+        _last_chatgpt = True
+        return
+    if app_path and 'openai.codex_' in app_path:
+        _last_chatgpt = True
         return

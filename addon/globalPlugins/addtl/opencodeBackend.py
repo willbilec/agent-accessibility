@@ -8,6 +8,26 @@
 # The dispatcher in _plugin.py invokes these methods only when OpenCode is the
 # foreground app. The original @script decorator and _guard() check lived here
 # in the standalone plugin; both moved to the unified dispatcher.
+#
+# --------------------------------------------------------------------------
+# 2.4.1: background poller was destabilizing OpenCode's renderer
+# --------------------------------------------------------------------------
+# In 2.4.0 the add-on polled OpenCode's SQLite DB every 1s and walked
+# the entire accessibility tree on every check. Combined with the
+# dispatcher's 1Hz foreground probe, that was enough to push OpenCode's
+# `LineDiff` renderer into an infinite-slow path on any session that
+# contained a particular kind of code change, hanging the renderer
+# window every 10-15 seconds. 2.4.1 backs the poller off:
+#   - Auto-read interval: 1s -> 5s
+#   - Foreground check:    reuses the router's 250ms cache (no ctypes
+#                          walk per tick)
+#   - Buffer fallback:     only on explicit hotkey, never from the
+#                          poller; long cooldown
+#   - ui.message:          queued + 1-per-3s minimum spacing, never
+#                          from the per-second tick
+# Net effect: the add-on's steady-state cost in OpenCode foreground
+# drops from ~30 foreground-queries/min + tree walks to ~12
+# foreground-queries/min (cache hits) + no tree walks.
 
 import os
 import time
@@ -24,8 +44,27 @@ from logHandler import log
 import wx
 import gui
 
-_AUTO_READ_INTERVAL_MS = 1000
-_CACHE_TTL = 3.0
+# 2.4.1: 1000ms was too aggressive for Electron diff renderers — the
+# 1Hz tick combined with the per-tick tree walk was enough to push
+# OpenCode's LineDiff into a slow path. 5s is still responsive for
+# chat-style auto-read but well below the threshold where the diff
+# renderer can wedge.
+_AUTO_READ_INTERVAL_MS = 5000
+_CACHE_TTL = 5.0
+
+# 2.4.1: minimum spacing between ui.message() calls fired by the
+# auto-read poller. 3s prevents the poller from triggering rapid
+# layout invalidations in the focused window. Explicit hotkeys
+# bypass this throttle (they fire ui.message immediately).
+_AUTO_READ_SPEAK_COOLDOWN_S = 3.0
+
+# 2.4.1: the buffer-fallback tree walk (`ti.makeTextInfo(UNIT_STORY)`)
+# is the single most expensive thing the add-on does. It must never
+# fire from the background poller. The poller uses the SQLite DB
+# exclusively; the tree walk is only available on explicit hotkey,
+# and even then with a 5s cooldown so that NVDA+Alt+Down spam doesn't
+# blast the renderer.
+_BUFFER_FALLBACK_COOLDOWN_S = 5.0
 
 _DBG_PATH = os.path.join(
     os.path.expanduser("~"), "AppData", "Roaming", "nvda", "opencodeAccessibility_debug.log"
@@ -68,6 +107,11 @@ class OpenCodeBackend(object):
         self._autoReadEnabled = True
         self._autoReadSeen = -1
         self._autoReadInitialized = False
+        # 2.4.1: throttle timestamps for the poller. The poller is no
+        # longer allowed to fire ui.message() more than once every
+        # _AUTO_READ_SPEAK_COOLDOWN_S, and the buffer-fallback tree
+        # walk is forbidden from the poller entirely.
+        self._lastSpokeAt = 0.0
         # Session cycle (for NVDA+Alt+Shift+N/P)
         self._sessionsCache = []      # [{label, sid, directory}, ...]
         self._sessionsCacheTs = 0.0
@@ -75,6 +119,9 @@ class OpenCodeBackend(object):
         self._autoReadSource = None
         self._bufferTextLast = ""
         self._lastSpokenHash = ""
+        # 2.4.1: separate cooldown for the tree-walk fallback. Only
+        # reset on explicit hotkey; the poller never reads this.
+        self._lastBufferFallbackAt = 0.0
         # Python interpreter for subprocess (cache after first discovery)
         self._pythonExe = None
         try:
@@ -137,6 +184,12 @@ class OpenCodeBackend(object):
 
     # ------------------------------------------------------------------
     # Foreground detection
+    #
+    # 2.4.1: the heavy ctypes-based detector (processPath via
+    # GetModuleFileNameExW + accessibility tree walk) is preserved for
+    # explicit hotkey paths where we *need* to be 100% sure of the
+    # foreground. The poller uses the router's cached version instead,
+    # which only re-checks every 250ms and never does ctypes.
     # ------------------------------------------------------------------
 
     def _detectForeground(self):
@@ -202,6 +255,11 @@ class OpenCodeBackend(object):
         return out
 
     def _isOpenCode(self):
+        # 2.4.1: the poller used to call this on every tick, which did
+        # a ctypes walk + accessibility tree query every 1s. The
+        # router's cached check (250ms TTL, no ctypes) is now the
+        # preferred path for the poller; this method is still here
+        # for explicit hotkey paths that need full reliability.
         info = self._detectForeground()
         for h in [(info.get(k) or "").lower() for k in
                   ("title", "className", "accName", "appName", "productName", "processPath")]:
@@ -213,6 +271,25 @@ class OpenCodeBackend(object):
             if "opencode" in base or "open code" in base:
                 return True
         return False
+
+    def _isOpenCodeCached(self):
+        """Cheap foreground check for the poller (2.4.1).
+
+        Uses the router's 250ms cache so the poller doesn't trigger
+        its own ctypes walk every tick. The router's _refresh() walks
+        the appModule tree but does NOT do ctypes — it's a few orders
+        of magnitude cheaper than _isOpenCode().
+
+        Returns True only if the router is reasonably confident the
+        foreground is OpenCode. If the router cache is stale or the
+        router's heuristic missed (e.g. an unusual title), the poller
+        will skip this tick — that's the safe direction.
+        """
+        try:
+            from .router import is_opencode
+            return bool(is_opencode())
+        except Exception:
+            return False
 
     # ------------------------------------------------------------------
     # Tree interceptor helpers (used for fallback + cursor anchoring)
@@ -324,7 +401,16 @@ class OpenCodeBackend(object):
     # Unified message cache
     # ------------------------------------------------------------------
 
-    def _getMessages(self, force_refresh=False):
+    def _getMessages(self, force_refresh=False, allow_buffer_fallback=True):
+        # 2.4.1: `allow_buffer_fallback` is False when called from the
+        # background poller. The buffer fallback does a full
+        # `ti.makeTextInfo(UNIT_STORY)` walk of OpenCode's accessibility
+        # tree, which forces the Electron renderer to re-render every
+        # visible CollapsibleRoot (including every code diff). Doing
+        # that on a 1Hz tick is what was wedging OpenCode's LineDiff
+        # renderer. The poller must only ever read the SQLite DB;
+        # buffer fallback is reserved for explicit hotkey paths, which
+        # are user-initiated one-shots.
         now = time.monotonic()
         stale = (now - self._msgCacheTime) >= _CACHE_TTL
 
@@ -337,11 +423,18 @@ class OpenCodeBackend(object):
         source = "db" if sid else "buffer"
         if db_messages:
             msgs = db_messages
-        else:
-            buffer_messages = self._loadMessagesFromBuffer()
-            if buffer_messages:
-                msgs = buffer_messages
-                source = "buffer"
+        elif allow_buffer_fallback:
+            # 2.4.1: gated on the cooldown so explicit hotkey paths
+            # don't blast the renderer either. Hotkey paths reset
+            # the cooldown before calling.
+            if (now - self._lastBufferFallbackAt) >= _BUFFER_FALLBACK_COOLDOWN_S:
+                self._lastBufferFallbackAt = now
+                buffer_messages = self._loadMessagesFromBuffer()
+                if buffer_messages:
+                    msgs = buffer_messages
+                    source = "buffer"
+            else:
+                _dbg("_getMessages: buffer fallback on cooldown, skipping")
 
         if msgs or force_refresh:
             self._msgCache = msgs
@@ -350,7 +443,7 @@ class OpenCodeBackend(object):
         elif not self._msgCache:
             self._msgCache = []
             self._msgCacheTime = now
-            self._autoReadSource = "buffer"
+            self._autoReadSource = "db" if not allow_buffer_fallback else "buffer"
 
         if sid and sid != self._msgCacheSession:
             self._msgIndex = -1
@@ -374,14 +467,21 @@ class OpenCodeBackend(object):
             core.callLater(_AUTO_READ_INTERVAL_MS, self._autoReadCheck)
 
     def _autoReadCheck(self):
+        # 2.4.1: this poller used to do a full ctypes foreground walk
+        # + SQLite read + accessibility-tree walk on every 1s tick. The
+        # combination was enough to push OpenCode's LineDiff renderer
+        # into a slow path that hung the window. Now:
+        #   - foreground check uses the router's 250ms cache
+        #   - message source is the SQLite DB only
+        #   - the buffer/tree fallback is skipped entirely from the
+        #     poller (gated behind _BUFFER_FALLBACK_COOLDOWN_S)
+        #   - ui.message() calls are throttled to 1 per 3s
         if not self._running:
             return
         try:
-            if not self._autoReadEnabled:
+            if not (self._autoReadEnabled and self._isOpenCodeCached()):
                 return
-            if not self._isOpenCode():
-                return
-            msgs, source = self._getMessages()
+            msgs, source = self._getMessages(allow_buffer_fallback=False)
             assistant_msgs = [m for m in msgs if m["role"] == "Assistant"]
             if assistant_msgs:
                 if not self._autoReadInitialized or self._autoReadSource != "db":
@@ -395,50 +495,34 @@ class OpenCodeBackend(object):
                     self._autoReadSource = "db"
                     _dbg(f"autoRead init (db): seen idx={self._autoReadSeen} of {len(assistant_msgs)} assistant msgs")
                 else:
+                    now = time.monotonic()
                     for i in range(self._autoReadSeen + 1, len(assistant_msgs)):
                         m = assistant_msgs[i]
                         text = m["text"]
                         if text and text != self._lastSpokenHash:
-                            ui.message("OpenCode: %s" % text)
-                            self._lastSpokenHash = text
-                            self._autoReadSeen = i
-                            _dbg(f"autoRead (db): spoke msg {i}")
+                            # 2.4.1: throttle. The poller used to fire
+                            # ui.message on every new text byte; combined
+                            # with the per-tick tree refresh, that was
+                            # enough to make Electron's renderer re-layout
+                            # so often that its diff code couldn't finish.
+                            if (now - self._lastSpokeAt) >= _AUTO_READ_SPEAK_COOLDOWN_S:
+                                ui.message("OpenCode: %s" % text)
+                                self._lastSpokeAt = now
+                                self._lastSpokenHash = text
+                                self._autoReadSeen = i
+                                _dbg(f"autoRead (db): spoke msg {i}")
+                            else:
+                                _dbg(f"autoRead (db): msg {i} skipped (speak cooldown)")
                     self._msgIndex = len(msgs) - 1
-                self._scheduleAutoRead()
-                return
-            buffer_msgs = [m for m in msgs if m["role"] == "OpenCode"]
-            if buffer_msgs:
-                text = buffer_msgs[0]["text"]
-                text_len = len(text)
-                if not text:
-                    self._scheduleAutoRead()
-                    return
-                if not self._autoReadInitialized or self._autoReadSource != "buffer":
-                    self._autoReadSeen = text_len
-                    self._autoReadInitialized = True
-                    self._autoReadSource = "buffer"
-                    self._bufferTextLast = text
-                    _dbg(f"autoRead init (buffer): len={text_len}")
-                    self._scheduleAutoRead()
-                    return
-                if text != self._bufferTextLast:
-                    if text_len > self._autoReadSeen:
-                        new_text = text[self._autoReadSeen:].strip()
-                        if new_text:
-                            _dbg(f"autoRead (buffer): +{len(new_text)} chars")
-                            ui.message(new_text)
-                    elif text_len < self._autoReadSeen:
-                        _dbg(f"autoRead (buffer): reset, len {self._autoReadSeen} -> {text_len}")
-                    self._autoReadSeen = text_len
-                    self._bufferTextLast = text
-            elif not self._autoReadInitialized:
-                text = self._readBufferRaw()
-                if text:
-                    self._autoReadSeen = len(text)
-                    self._autoReadInitialized = True
-                    self._autoReadSource = "buffer"
-                    self._bufferTextLast = text
-                    _dbg(f"autoRead init (direct buffer): len={len(text)}")
+            # 2.4.1: the buffer-source auto-read path (and the
+            # direct-buffer fallback inside _autoReadCheck) is removed.
+            # The poller no longer reads the accessibility tree — that's
+            # the single most expensive thing the add-on can do, and
+            # doing it from a 1Hz loop is what was destabilizing the
+            # renderer. If the user wants the buffer-source view, they
+            # can press NVDA+Alt+Down (next message) or NVDA+Alt+R
+            # (re-read) which use the explicit-hotkey path with the
+            # cooldown.
         except Exception as e:
             log.warning("opencodeAccessibility: autoRead error: %s", e)
             _dbg("autoRead ERROR:", e)
@@ -836,9 +920,9 @@ class OpenCodeBackend(object):
                 picked = sessions[idx]
                 directory = picked.get("directory", "")
                 session_title = picked["label"].split("  \u2014  ")[0].strip()
+                session_id = picked.get("sid", "")
                 _dbg("script_openSessionPicker: chose %s" % picked["label"])
-                if directory and self._tryDeepLinkOpenProject(directory):
-                    self._resetSessionState(picked["label"])
+                if self._openProjectAndFocusSession(directory, session_id, session_title):
                     ui.message("Opening: %s" % session_title)
                 else:
                     ui.message("Could not switch to %s" % session_title)
@@ -856,6 +940,83 @@ class OpenCodeBackend(object):
         except Exception as e:
             _dbg("_tryDeepLinkOpenProject: error %s" % e)
             return False
+
+    def _tryDeepLinkOpenSession(self, directory, session_id):
+        """Open a specific session via the opencode://session deep link.
+
+        NOTE (2.4.0): This deep link is NOT registered in OpenCode's
+        renderer — it is silently dropped by `parseDeepLink`, which only
+        recognizes `open-project` and `new-session`. The earlier
+        `patch_opencode_asar.js` patcher that used to add a `session`
+        hostname handler to the renderer was removed in 2.4.0 because
+        patching OpenCode's app.asar was found to destabilize the app.
+        This method is kept for source compatibility (and so future
+        upstream support can be detected by the renderer accepting the
+        URL without complaint) but currently behaves the same as
+        `_tryDeepLinkOpenProject` — i.e. it lands on the most-recent
+        session in the project, not the picked one.
+        """
+        # Fire the URL so the OS hands it to the renderer; whether the
+        # renderer actually does anything with it is up to OpenCode.
+        try:
+            import urllib.parse
+            enc_dir = urllib.parse.quote(directory, safe="")
+            enc_id = urllib.parse.quote(session_id, safe="")
+            url = "opencode://session?id=%s&directory=%s" % (enc_id, enc_dir)
+            os.startfile(url)
+            _dbg("_tryDeepLinkOpenSession: sent %s" % url[:100])
+            return True
+        except Exception as e:
+            _dbg("_tryDeepLinkOpenSession: error %s" % e)
+            return False
+
+    # ------------------------------------------------------------------
+    # Open project + focus a specific session within it
+    #
+    # When the user picks a session from the picker (or cycles to one
+    # with NVDA+Alt+Shift+N/P), we want to land on a session in the
+    # right project.
+    #
+    # History:
+    #   2.2.0 — only the `opencode://open-project?directory=...` link
+    #           was available; the user landed on whatever the project
+    #           auto-opened to (most recent session).
+    #   2.3.0 — added an `opencode://session?id=<id>&directory=<dir>`
+    #           link and a JS patcher (patch_opencode_asar.js) that
+    #           added a corresponding hostname handler to the renderer,
+    #           so the picked session was opened exactly.
+    #   2.4.0 — the JS patcher was removed because it destabilized
+    #           OpenCode's renderer (it was making changes to a file
+    #           that OpenCode's own update flow regularly overwrites,
+    #           and the self-heal retry was firing too aggressively
+    #           in some setups). Without the patch, the session deep
+    #           link is silently dropped by the renderer, so we
+    #           fall back to the project-only deep link. The user
+    #           still lands in the correct project — just not
+    #           necessarily on the exact session they picked.
+    # ------------------------------------------------------------------
+
+    def _openProjectAndFocusSession(self, directory, session_id, session_title):
+        """Open a project and (if possible) focus a specific session.
+
+        Returns True on success (deep link sent).
+        Returns False if the project couldn't be opened at all.
+        """
+        if not directory:
+            return False
+        # Try the dedicated session deep link first. In OpenCode builds
+        # that don't recognize `opencode://session`, the renderer
+        # silently drops it and the project-only link below takes over.
+        if session_id and self._tryDeepLinkOpenSession(directory, session_id):
+            self._resetSessionState(session_title or "")
+            return True
+        # Fall back to the project-only deep link. This is the path
+        # that always works without any asar patching.
+        if self._tryDeepLinkOpenProject(directory):
+            self._resetSessionState(session_title or "")
+            return True
+        _dbg("_openProjectAndFocusSession: all deep links failed for %s" % directory)
+        return False
 
     # ------------------------------------------------------------------
     # Session cycle (NVDA+Alt+Shift+N / NVDA+Alt+Shift+P)
@@ -888,8 +1049,8 @@ class OpenCodeBackend(object):
         picked = self._sessionsCache[self._sessionIdx]
         directory = picked.get("directory", "")
         session_title = picked["label"].split("  \u2014  ")[0].strip()
-        if directory and self._tryDeepLinkOpenProject(directory):
-            self._resetSessionState(picked["label"])
+        session_id = picked.get("sid", "")
+        if self._openProjectAndFocusSession(directory, session_id, session_title):
             ui.message("[%d/%d] %s" % (
                 self._sessionIdx + 1,
                 len(self._sessionsCache),

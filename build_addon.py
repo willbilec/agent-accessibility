@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: UTF-8 -*-
-# build_addon.py - Build the Hermes Accessibility NVDA addon package
+# build_addon.py - Build the Agent Desktop Accessibility NVDA add-on package
 
 import os
 import zipfile
@@ -24,7 +24,7 @@ output_filename = "%s-%s.nvda-addon" % (addon_name, version)
 output_path = os.path.join(OUTPUT_DIR, output_filename)
 
 print("=" * 60)
-print("Building Hermes Accessibility NVDA Addon")
+print("Building Agent Desktop Accessibility NVDA Add-on")
 print("  Name:    %s" % addon_name)
 print("  Version: %s" % version)
 print("  Output:  %s" % output_path)
@@ -56,7 +56,9 @@ with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zf:
 		zf.write(readme_path, "readme.html")
 		print("  + readme.html")
 
-	# Include the app.asar auto-patch script
+	# Include the Hermes app.asar auto-patch script. The OpenCode
+	# equivalent (patch_opencode_asar.js) was removed in 2.4.0 because
+	# patching OpenCode's app.asar destabilized the renderer.
 	patch_script = os.path.join(SCRIPT_DIR, "patch_app_asar.js")
 	if os.path.exists(patch_script):
 		zf.write(patch_script, "patch_app_asar.js")

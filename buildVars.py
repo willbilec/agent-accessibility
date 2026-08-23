@@ -9,9 +9,9 @@
 addon_info = {
 	# Add-on information
 	"addon_name": "agentDesktopAccessibility",
-	"addon_summary": "Hermes + OpenCode Desktop Accessibility",
-	"addon_description": "Merged add-on: message navigation, session switching, @-reference picker, and auto-read for the Hermes Agent and OpenCode Desktop apps. Hotkeys are foreground-aware; the same key does the right thing in each app. NVDA+Alt+Up/Down/Home/End navigate messages; NVDA+Alt+S opens a session picker; NVDA+Alt+Shift+D reports foreground metadata.",
-	"addon_version": "2.1.0",
+	"addon_summary": "Hermes + OpenCode + ChatGPT Codex Accessibility",
+	"addon_description": "Merged NVDA accessibility for Hermes Agent, OpenCode Desktop, and the ChatGPT desktop app. Includes global Codex auto-read of collapsed activity summaries, commentary, and final responses from every active top-level task, using stable per-task offsets and separate NVDA-priority utterances; completion notifications; global Codex transcript reading; background-only NVDA buffer task cycling and foreground live-task-synchronized navigation limited to running or seven-day-recent tasks; globally available Codex project/task pickers that restore an existing ChatGPT window or cold-start it before applying the selection; consumer Chat message sending with spoken assistant activity updates; foreground-aware Hermes/OpenCode routing; Codex menu and project/task mirrors; usage limits with confirmed banked-reset redemption; the Hermes reference picker and speech filter; and OpenCode auto-read.",
+	"addon_version": "2.8.8",
 	"addon_author": "willb <willbilec@gmail.com>",
 	"addon_url": "",
 	"addon_docFileName": "readme.html",

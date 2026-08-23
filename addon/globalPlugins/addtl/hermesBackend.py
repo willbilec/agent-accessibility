@@ -113,7 +113,11 @@ class HermesBackend(object):
         can quickly tell whether the deep-link patch is in place after
         a Hermes update.
         """
-        return self._msg.auditHermesPatcher()
+        return hermesMessageNav.auditHermesPatcher()
+
+    def ensurePatcher(self, verbose=False):
+        """Apply the Hermes app.asar patch through its module-level helper."""
+        return hermesMessageNav._ensureAppAsarPatched(verbose=verbose)
 
     # ── Preserved Hermes-specific gestures ──────────────────────
     #
