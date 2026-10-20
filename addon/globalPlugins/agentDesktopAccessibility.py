@@ -9,7 +9,7 @@
 #
 # Hotkey set (agent-aware, with global Codex transcript-buffer access):
 #
-#   Shared (Hermes, OpenCode, or ChatGPT Codex):
+#   Shared (Hermes, OpenCode, ChatGPT Codex, Command Code, or Freebuff):
 #     kb:NVDA+alt+downArrow   next message
 #     kb:NVDA+alt+upArrow     previous message
 #     kb:NVDA+alt+rightArrow  next active task (ChatGPT Codex)
@@ -41,9 +41,9 @@
 #     kb:NVDA+alt+u           usage summary; press twice for confirmed banked reset (available globally)
 #     kb:NVDA+alt+space       re-read current transcript message
 #
-#   OpenCode and ChatGPT Codex:
+#   OpenCode, Command Code, Freebuff, and ChatGPT Codex:
 #     kb:NVDA+alt+t           read thinking trace (active tasks in ChatGPT)
-#     kb:NVDA+alt+a           toggle auto-read
+#     kb:NVDA+alt+a           toggle auto-read (OpenCode and ChatGPT Codex only)
 #
 #   Hermes only — PRESERVED from the original hermesAccessibility 1.7.2
 #   (pass-through when OpenCode is foreground):
@@ -72,10 +72,13 @@ import ui
 from scriptHandler import getLastScriptRepeatCount, script
 from logHandler import log
 
-from .addtl.router import route, route_message_command
+from .addtl.router import route
 from .addtl.hermesBackend import HermesBackend
 from .addtl.opencodeBackend import OpenCodeBackend
 from .addtl.chatgptBackend import ChatGPTBackend
+from .addtl.commandCodeBackend import CommandCodeBackend
+from .addtl.freebuffBackend import FreebuffBackend
+from .addtl.agentTranscriptBackend import AgentTranscriptBackend, SOURCES
 
 
 class GlobalPlugin(globalPluginHandler.GlobalPlugin):
@@ -83,11 +86,15 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
 
     def __init__(self):
         super().__init__()
-        log.info("agentDesktopAccessibility 2.8.8 loading")
+        log.info("agentDesktopAccessibility 2.10.0 loading")
         self._hermes = HermesBackend()
         self._opencode = OpenCodeBackend(plugin=self)
         self._chatgpt = ChatGPTBackend()
-        log.info("agentDesktopAccessibility 2.8.8 loaded — backends: hermes, opencode, chatgpt")
+        self._commandcode = CommandCodeBackend()
+        self._freebuff = FreebuffBackend()
+        self._transcripts = {key: AgentTranscriptBackend(label, provider) for key, label, provider in SOURCES}
+        self._transcriptSource = None
+        log.info("agentDesktopAccessibility 2.10.0 loaded — backends: hermes, opencode, chatgpt, commandcode, freebuff, agent transcript buffers")
         # Self-heal the Hermes app.asar patch on load. Runs in a background
         # thread via wx so the keystroke handler isn't blocked. If the patch
         # is already in place, this is a single asar file read (<100ms).
@@ -118,7 +125,36 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         # `opencode://open-project?directory=...` deep link, which
         # OpenCode supports out of the box.
 
+    def _target(self):
+        return route() or self._transcriptSource
+
+    @script(gesture="kb:NVDA+alt+shift+s", description="Choose agent transcript source")
+    def script_transcriptSource(self, gesture):
+        import gui
+        import wx
+
+        def show():
+            gui.mainFrame.prePopup()
+            dialog = wx.SingleChoiceDialog(
+                gui.mainFrame, "Choose a transcript source. Selection changes only the NVDA reading buffer.",
+                "Agent transcripts", ["ChatGPT Codex (default)"] + [label for key, label, provider in SOURCES])
+            try:
+                if dialog.ShowModal() == wx.ID_OK:
+                    index = dialog.GetSelection()
+                    self._transcriptSource = SOURCES[index - 1][0] if index > 0 else None
+                    if self._transcriptSource:
+                        self._transcripts[self._transcriptSource].openSessionPicker()
+                    else:
+                        ui.message("ChatGPT Codex transcript buffer selected")
+            finally:
+                dialog.Destroy()
+                gui.mainFrame.postPopup()
+
+        wx.CallAfter(show)
+
     def terminate(self):
+        for backend in self._transcripts.values():
+            backend.terminate()
         try:
             self._hermes.terminate()
         except Exception as e:
@@ -131,6 +167,14 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             self._chatgpt.terminate()
         except Exception as e:
             log.warning("agentDesktopAccessibility: chatgpt terminate error: %s", e)
+        try:
+            self._commandcode.terminate()
+        except Exception as e:
+            log.warning("agentDesktopAccessibility: commandcode terminate error: %s", e)
+        try:
+            self._freebuff.terminate()
+        except Exception as e:
+            log.warning("agentDesktopAccessibility: freebuff terminate error: %s", e)
         super().terminate()
 
     # ─────────────────────────────────────────────────────────────
@@ -138,26 +182,38 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     # ─────────────────────────────────────────────────────────────
 
     @script(gesture="kb:NVDA+alt+downArrow",
-            description="Next message (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Next message (focused agent or selected transcript buffer)")
     def script_nextMessage(self, gesture):
-        target = route_message_command()
+        target = self._target() or "chatgpt"
         if target == "hermes":
             self._hermes.nextMessage()
         elif target == "opencode":
             self._opencode.nextMessage()
         elif target == "chatgpt":
             self._chatgpt.nextMessage()
+        elif target == "commandcode":
+            self._commandcode.nextMessage()
+        elif target == "freebuff":
+            self._freebuff.nextMessage()
+        elif target in self._transcripts:
+            self._transcripts[target].nextMessage()
 
     @script(gesture="kb:NVDA+alt+upArrow",
-            description="Previous message (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Previous message (focused agent or selected transcript buffer)")
     def script_previousMessage(self, gesture):
-        target = route_message_command()
+        target = self._target() or "chatgpt"
         if target == "hermes":
             self._hermes.prevMessage()
         elif target == "opencode":
             self._opencode.previousMessage()
         elif target == "chatgpt":
             self._chatgpt.previousMessage()
+        elif target == "commandcode":
+            self._commandcode.previousMessage()
+        elif target == "freebuff":
+            self._freebuff.previousMessage()
+        elif target in self._transcripts:
+            self._transcripts[target].previousMessage()
 
     @script(gesture="kb:NVDA+alt+rightArrow",
             description="Next active task (ChatGPT Codex)")
@@ -170,78 +226,114 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
         self._chatgpt.previousSession()
 
     @script(gesture="kb:NVDA+alt+home",
-            description="First message (Hermes, OpenCode, or ChatGPT Codex)")
+            description="First message (focused agent or selected transcript buffer)")
     def script_firstMessage(self, gesture):
-        target = route_message_command()
+        target = self._target() or "chatgpt"
         if target == "hermes":
             self._hermes.firstMessage()
         elif target == "opencode":
             self._opencode.firstMessage()
         elif target == "chatgpt":
             self._chatgpt.firstMessage()
+        elif target == "commandcode":
+            self._commandcode.firstMessage()
+        elif target == "freebuff":
+            self._freebuff.firstMessage()
+        elif target in self._transcripts:
+            self._transcripts[target].firstMessage()
 
     @script(gesture="kb:NVDA+alt+end",
-            description="Last message (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Last message (focused agent or selected transcript buffer)")
     def script_lastMessage(self, gesture):
-        target = route_message_command()
+        target = self._target() or "chatgpt"
         if target == "hermes":
             self._hermes.lastMessage()
         elif target == "opencode":
             self._opencode.lastMessage()
         elif target == "chatgpt":
             self._chatgpt.lastMessage()
+        elif target == "commandcode":
+            self._commandcode.lastMessage()
+        elif target == "freebuff":
+            self._freebuff.lastMessage()
+        elif target in self._transcripts:
+            self._transcripts[target].lastMessage()
 
     @script(gesture="kb:NVDA+alt+r",
-            description="Re-read current message (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Re-read current message (focused agent or selected transcript buffer)")
     def script_readCurrentMessage(self, gesture):
-        target = route_message_command()
+        target = self._target() or "chatgpt"
         if target == "hermes":
             self._hermes.readCurrentMessage()
         elif target == "opencode":
             self._opencode.readCurrentMessage()
         elif target == "chatgpt":
             self._chatgpt.readCurrentMessage()
+        elif target == "commandcode":
+            self._commandcode.readCurrentMessage()
+        elif target == "freebuff":
+            self._freebuff.readCurrentMessage()
+        elif target in self._transcripts:
+            self._transcripts[target].readCurrentMessage()
 
     # ─────────────────────────────────────────────────────────────
     # Session management — Hermes OR OpenCode
     # ─────────────────────────────────────────────────────────────
 
     @script(gesture="kb:NVDA+alt+s",
-            description="Open session switcher (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Open session switcher (focused agent or selected transcript buffer)")
     def script_sessionPicker(self, gesture):
-        target = route()
+        target = self._target()
         if target == "hermes":
             self._hermes.pickSession()
         elif target == "opencode":
             self._opencode.openSessionPicker()
         elif target == "chatgpt":
             self._chatgpt.openSessionPicker()
+        elif target == "commandcode":
+            self._commandcode.openSessionPicker()
+        elif target == "freebuff":
+            self._freebuff.openSessionPicker()
+        elif target in self._transcripts:
+            self._transcripts[target].openSessionPicker()
         else:
             self._chatgpt.openSessionPicker()
 
     @script(gesture="kb:NVDA+alt+shift+n",
-            description="Next session (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Next session (focused agent or selected transcript buffer)")
     def script_nextSession(self, gesture):
-        target = route()
+        target = self._target()
         if target == "hermes":
             self._hermes.nextSession()
         elif target == "opencode":
             self._opencode.nextSession()
         elif target == "chatgpt":
             self._chatgpt.nextSession()
+        elif target == "commandcode":
+            self._commandcode.nextSession()
+        elif target == "freebuff":
+            self._freebuff.nextSession()
+        elif target in self._transcripts:
+            self._transcripts[target].nextSession()
         else:
             gesture.send()
 
     @script(gesture="kb:NVDA+alt+shift+p",
-            description="Previous session (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Previous session (focused agent or selected transcript buffer)")
     def script_previousSession(self, gesture):
-        target = route()
+        target = self._target()
         if target == "hermes":
             self._hermes.prevSession()
         elif target == "opencode":
             self._opencode.previousSession()
         elif target == "chatgpt":
             self._chatgpt.previousSession()
+        elif target == "commandcode":
+            self._commandcode.previousSession()
+        elif target == "freebuff":
+            self._freebuff.previousSession()
+        elif target in self._transcripts:
+            self._transcripts[target].previousSession()
         else:
             gesture.send()
 
@@ -262,9 +354,9 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             gesture.send()
 
     @script(gesture="kb:NVDA+alt+d",
-            description="Diagnostic dump (Hermes, OpenCode, or ChatGPT Codex)")
+            description="Diagnostic dump (focused agent or selected transcript buffer)")
     def script_dump(self, gesture):
-        target = route()
+        target = self._target()
         if target == "hermes":
             self._hermes.dumpMessages()
             # Also surface patcher audit so the user can confirm the deep
@@ -285,6 +377,12 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
             # history). Nothing to audit here.
         elif target == "chatgpt":
             self._chatgpt.dumpDebug()
+        elif target == "commandcode":
+            self._commandcode.dumpDebug()
+        elif target == "freebuff":
+            self._freebuff.dumpDebug()
+        elif target in self._transcripts:
+            self._transcripts[target].dumpDebug()
         else:
             gesture.send()
 
@@ -293,11 +391,17 @@ class GlobalPlugin(globalPluginHandler.GlobalPlugin):
     # ─────────────────────────────────────────────────────────────
 
     @script(gesture="kb:NVDA+alt+t",
-            description="Open active tasks in ChatGPT Codex or read thinking trace in OpenCode")
+            description="Read thinking trace in OpenCode, Command Code, or Freebuff, or open active tasks in ChatGPT Codex")
     def script_readThinking(self, gesture):
-        target = route()
+        target = self._target()
         if target == "opencode":
             self._opencode.readThinking()
+        elif target == "commandcode":
+            self._commandcode.readThinking()
+        elif target == "freebuff":
+            self._freebuff.readThinking()
+        elif target in self._transcripts:
+            self._transcripts[target].readThinking()
         else:
             self._chatgpt.openTaskPicker()
 
