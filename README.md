@@ -2,17 +2,19 @@
 
 > **Status: WORK IN PROGRESS.** This add-on is functional but still being polished. Hotkeys, foreground routing, and the Hermes `app.asar` patcher all work, but expect rough edges: the session picker dialog is unstyled, the diagnostic dump is verbose, the speech filter regex set is not exhaustive, and the auto-read behavior in OpenCode may stutter on long messages. Do not rely on this for production screen-reader use without testing your specific workflow first. Please file issues for anything that gets in your way.
 
-An [NVDA](https://www.nvaccess.org/) screen-reader add-on that improves accessibility of three desktop apps:
+An [NVDA](https://www.nvaccess.org/) screen-reader add-on that improves accessibility of five desktop apps:
 
 - **Hermes Agent** (Electron)
 - **OpenCode Desktop** (Electron)
 - **ChatGPT Desktop — consumer Chat and the Codex workspace**
+- **Command Code Desktop** (Electron)
+- **Freebuff Desktop** (Electron)
 
 The add-on routes shared commands to the focused agent app. Codex transcript reading and active-task cycling remain available from other applications through NVDA's local buffer. It merges the previous `hermesAccessibility`, `opencodeAccessibility`, and `codexAccessibility` add-ons.
 
 ## Download
 
-Grab the latest `.nvda-addon` from the [**Releases**](../../releases) page. The current build is **v2.8.8**.
+Grab the latest `.nvda-addon` from the [**Releases**](../../releases) page. The current build is **v2.9.0**.
 
 ## Install
 
@@ -20,7 +22,7 @@ Two equivalent ways to install the add-on on NVDA 2024.1 or later:
 
 **Option A — open the file directly**
 
-Double-click `agentDesktopAccessibility-2.8.8.nvda-addon` in your file manager (or open it from your browser's downloads). NVDA will detect the add-on and offer to install it.
+Double-click `agentDesktopAccessibility-2.9.0.nvda-addon` in your file manager (or open it from your browser's downloads). NVDA will detect the add-on and offer to install it.
 
 **Option B — from the Add-on Store**
 
@@ -38,11 +40,13 @@ Every shared gesture in the tables below checks which app is currently focused:
 - **Hermes focused** — calls the Hermes backend (`state.db`, `hermes://session/<id>` deep links, status suppression, `@` picker).
 - **OpenCode focused** — calls the OpenCode backend (`opencode.db`, `opencode://open-project?directory=<dir>` deep links, auto-read, thinking trace).
 - **ChatGPT focused** — calls the Codex backend (`%USERPROFILE%\.codex`, `codex://` links, active-task and project/task pickers, transcript navigation, and usage limits).
+- **Command Code focused** — calls the Command Code backend (`~/.commandcode/projects/<slug>/<thread>.jsonl` transcripts, `%APPDATA%\Command Code\app-state.json`, thinking trace, thread browsing).
+- **Freebuff focused** — calls the Freebuff backend (`~/.config/freebuff-desktop` state plus each project's `desktop-v2.db`, thinking trace, thread browsing).
 - **Neither focused** — message-reading commands use the selected Codex transcript buffer. Left/right changes that NVDA buffer without changing or focusing ChatGPT. Unrelated foreground-specific gestures still pass through.
 
 App-specific gestures are routed by foreground. For example, <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> opens active tasks in ChatGPT Codex and reads the thinking trace in OpenCode.
 
-## Hotkeys (shared — Hermes, OpenCode, or ChatGPT Codex)
+## Hotkeys (shared — Hermes, OpenCode, ChatGPT Codex, Command Code, or Freebuff)
 
 | Gesture | Action |
 | --- | --- |
@@ -88,7 +92,7 @@ Press <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>U</kbd> once to hear the current 5-hou
 
 Codex always announces “Codex task finished” when a task reaches its final response, even when Auto-Read is off or ChatGPT is not focused. While Auto-Read is on, activity, commentary, and responses from every active top-level task are read globally; there is no foreground or remembered-window gate. Each update is queued as a separate NVDA-priority utterance so one task cannot hide another later in a combined message. It identifies every announcement by task. While Codex is working, Auto-Read speaks the text represented by its collapsed activity button as “Codex activity” without expanding or clicking the item. Archived tasks and internal subagent transcripts are excluded.
 
-## Hotkeys (OpenCode, plus routed Codex Auto-Read)
+## Hotkeys (OpenCode, Command Code, Freebuff, plus routed Codex Auto-Read)
 
 These pass through when Hermes is the foreground app. <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>T</kbd> is foreground-routed and opens active tasks when ChatGPT is focused.
 
@@ -153,11 +157,22 @@ The Hermes desktop app's built-in deep-link handler only routes `kind=blueprint`
 
 The proper long-term fix is for Hermes' `handleDeepLink` to route `kind=session` natively — a one-line change. Until that lands upstream, the patcher is the binding solution.
 
+## Command Code and Freebuff
+
+Both apps are read from their own local stores rather than scraped from the rendered conversation:
+
+- **Command Code Desktop** — the active thread is `activeThreadId` in `%APPDATA%\Command Code\app-state.json`, and the transcript is parsed from the CLI's JSONL log at `~/.commandcode/projects/<project-slug>/<thread-id>.jsonl`. Messages cached in `app-state.json` are the fallback for threads the CLI has not written yet. The picker lists every transcript on disk, newest first, using the renderer's title when it has one and the opening user message otherwise.
+- **Freebuff Desktop** — the active thread is `workspace.activeId` in `~/.config/freebuff-desktop/state.json`; its messages come from the `messages` table in that project's `desktop-v2.db`. Text and reasoning parts are read; tool, change, and ad parts are skipped.
+
+Switching threads is the rough edge. Command Code registers `commandcode://` only for its sign-in callback, and Freebuff registers no URL scheme at all, so neither app can be told to open a thread from outside. The add-on activates the item with a matching accessible name inside the app's own window instead, and announces a failure rather than doing nothing when the renderer does not expose it. Reading messages and <kbd>NVDA</kbd>+<kbd>Alt</kbd>+<kbd>D</kbd> always work; the diagnostic dump lands in `%APPDATA%\nvda\commandCodeAccessibility_debug.log` or `%APPDATA%\nvda\freebuffAccessibility_debug.log`.
+
 ## Compatibility
 
 - **NVDA** 2024.1 or later (tested on 2026.1)
 - **Hermes Agent** desktop app (Electron) — speech filter, message nav, session switching, `@` picker
 - **OpenCode Desktop** — message nav, session switching, auto-read, thinking trace
+- **Command Code Desktop** (`Command Code.exe`) — message nav, thinking trace, thread picker and threading from the CLI transcripts and `app-state.json`
+- **Freebuff Desktop** (`Freebuff.exe`) — message nav, thinking trace, thread picker and threading from each project's `desktop-v2.db`
 - **ChatGPT Desktop** (`ChatGPT.exe`, visible window title `ChatGPT`) — consumer Chat sending/response reading plus Codex menus, active tasks, projects/tasks, transcript nav, and usage limits. Consumer Chat support targets the current English accessible labels `Message ChatGPT`, `Send`, and `ChatGPT is responding`; other display languages may need additional label mappings. The Microsoft Store package and Codex integration surfaces still use the `OpenAI.Codex`, `.codex`, `codex`, and `codex://` names.
 - **Codex CLI 0.141.0 or later, signed in with the same ChatGPT account**, for banked-reset counts and redemption. Version 0.144.0 or later is recommended so the add-on can select the earliest-expiring reset and describe its title and expiration.
 
@@ -168,7 +183,7 @@ addon/                  # NVDA add-on source (manifest.ini + Python modules)
   manifest.ini
   appModules/Hermes.py
   globalPlugins/agentDesktopAccessibility.py
-  globalPlugins/addtl/  # Hermes, OpenCode, and ChatGPT Codex backends plus router/helpers
+  globalPlugins/addtl/  # Hermes, OpenCode, ChatGPT Codex, Command Code, and Freebuff backends plus router/helpers
 buildVars.py            # build metadata (name + version)
 build_addon.py          # builds the .nvda-addon zip from addon/
 patch_app_asar.js       # Hermes app.asar patcher (bundled in the .nvda-addon)

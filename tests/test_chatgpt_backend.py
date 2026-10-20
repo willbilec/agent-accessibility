@@ -987,7 +987,10 @@ class UsageLimitsTests(unittest.TestCase):
 		self.assertIn("5-hour limit reached", message)
 
 	def test_format_reset_time_uses_full_date_for_weekly_window(self):
-		text = self.plugin._formatResetTime(1778611314, self.plugin.WEEKLY_WINDOW_MINS)
+		from datetime import datetime
+		with mock.patch.object(self.plugin, "datetime") as clock:
+			clock.fromtimestamp.return_value = datetime(2026, 5, 12, 12, 41)
+			text = self.plugin._formatResetTime(1778611314, self.plugin.WEEKLY_WINDOW_MINS)
 
 		self.assertEqual(text, "Tuesday, May 12, 2026 12:41 PM")
 

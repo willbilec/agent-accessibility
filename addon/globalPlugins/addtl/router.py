@@ -4,15 +4,15 @@
 # Foreground-aware dispatcher helper for agentDesktopAccessibility.
 #
 # The dispatcher in agentDesktopAccessibility.py calls route() to decide
-# which backend (Hermes, OpenCode, or ChatGPT Codex) should handle a
-# given keystroke.
+# which backend (Hermes, OpenCode, ChatGPT Codex, Command Code, or Freebuff)
+# should handle a given keystroke.
 #
 # IMPORTANT: this file is intentionally NOT a plugin (no GlobalPlugin class).
 # It exists purely as a helper module that the dispatcher imports. NVDA's
 # plugin loader will try to register it as a plugin and log an
 # AttributeError on every startup; that's noise, not breakage.
 #
-# Returns 'hermes', 'opencode', 'chatgpt', or None.
+# Returns 'hermes', 'opencode', 'chatgpt', 'commandcode', 'freebuff', or None.
 #
 # Caches the result for 250ms to avoid hammering the UI Automation
 # tree on every keystroke.
@@ -26,6 +26,8 @@ _last_check = 0.0
 _last_hermes = False
 _last_opencode = False
 _last_chatgpt = False
+_last_commandcode = False
+_last_freebuff = False
 
 
 def _now():
@@ -36,10 +38,13 @@ def reset_cache():
     """Clear the foreground cache. Useful for tests or when an event hook
     definitively knows the foreground changed."""
     global _last_check, _last_hermes, _last_opencode, _last_chatgpt
+    global _last_commandcode, _last_freebuff
     _last_check = 0.0
     _last_hermes = False
     _last_opencode = False
     _last_chatgpt = False
+    _last_commandcode = False
+    _last_freebuff = False
 
 
 def is_hermes():
@@ -86,12 +91,40 @@ def is_chatgpt():
     return _last_chatgpt
 
 
+def is_commandcode():
+    """True for Command Code Desktop (Electron, `Command Code.exe`).
+
+    The executable name is the stable signal: the CLI of the same name runs
+    inside ordinary terminals, whose app names and titles must not match.
+    """
+    global _last_check, _last_commandcode
+    now = _now()
+    if now - _last_check < _CACHE_TTL and _last_check > 0:
+        return _last_commandcode
+    _refresh()
+    return _last_commandcode
+
+
+def is_freebuff():
+    """True for Freebuff Desktop (Electron, `Freebuff.exe`)."""
+    global _last_check, _last_freebuff
+    now = _now()
+    if now - _last_check < _CACHE_TTL and _last_check > 0:
+        return _last_freebuff
+    _refresh()
+    return _last_freebuff
+
+
 def route():
     """Return the backend name for the foreground agent desktop app."""
     if is_hermes():
         return 'hermes'
     if is_opencode():
         return 'opencode'
+    if is_commandcode():
+        return 'commandcode'
+    if is_freebuff():
+        return 'freebuff'
     if is_chatgpt():
         return 'chatgpt'
     return None
@@ -110,10 +143,13 @@ def route_message_command():
 def _refresh():
     """Recompute both flags from the current foreground object."""
     global _last_check, _last_hermes, _last_opencode, _last_chatgpt
+    global _last_commandcode, _last_freebuff
     _last_check = _now()
     _last_hermes = False
     _last_opencode = False
     _last_chatgpt = False
+    _last_commandcode = False
+    _last_freebuff = False
     try:
         fg = api.getForegroundObject()
     except Exception:
@@ -187,6 +223,22 @@ def _refresh():
     # via the title as a last resort.
     if title and 'opencode' in title:
         _last_opencode = True
+        return
+
+    # Command Code and Freebuff detection. Both are Electron apps whose
+    # executables are the only reliable signal: their product names also
+    # belong to command-line tools that run inside terminals, so matching a
+    # window title or a bare process name would route the wrong app.
+    exe_fields = tuple(field for field in (process_path, app_path) if field)
+    if any('command code' in field for field in exe_fields) \
+            or app_name.startswith('command code') \
+            or product_name.startswith('command code'):
+        _last_commandcode = True
+        return
+    if any('freebuff' in field for field in exe_fields) \
+            or 'freebuff' in app_name \
+            or 'freebuff' in product_name:
+        _last_freebuff = True
         return
 
     # ChatGPT/Codex detection. Do not use the window title as an independent
