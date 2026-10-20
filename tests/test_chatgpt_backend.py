@@ -253,6 +253,42 @@ class UsageLimitsTests(unittest.TestCase):
 
 		self.assertEqual(messages, ["Codex in Current task — Accessibility. New response"])
 
+	def test_migrated_codex_transcript_uses_selected_database_task(self):
+		backend = self.plugin.ChatGPTBackend()
+		backend._activeTaskId = "migrated-task"
+		backend._databaseTranscript = ("migrated-task", {
+			"id": "migrated-task", "messages": [{"role": "Assistant", "text": "Answer"}]}, 1)
+		with mock.patch.object(backend, "_resolveTranscriptPath", return_value=None), \
+			mock.patch.object(self.plugin, "_readAgentStore") as read, \
+			mock.patch.object(self.plugin.glob, "glob", return_value=["history.sqlite"]):
+			path, messages = backend._loadActiveTranscript()
+		self.assertEqual(path, "codex-db:migrated-task")
+		self.assertEqual(messages[0]["role"], "assistant")
+		read.assert_not_called()
+
+	def test_migrated_codex_navigation_loads_off_thread(self):
+		backend = self.plugin.ChatGPTBackend()
+		with mock.patch.object(backend, "_resolveTranscriptPath", return_value=None), \
+			mock.patch.object(self.plugin.glob, "glob", return_value=["history.sqlite"]), \
+			mock.patch.object(self.plugin.threading, "Thread") as thread, \
+			mock.patch.object(self.plugin, "_readAgentStore") as read:
+			backend.nextMessage()
+			thread.assert_called_once()
+			read.assert_not_called()
+
+	def test_database_updates_are_consumed_once_and_keep_completion_speech(self):
+		backend = self.plugin.ChatGPTBackend()
+		backend._databaseItems = [({"title": "Migrated", "project": "P"},
+			{"role": "assistant", "text": "Done", "phase": "final_answer"})]
+		messages = []
+		with mock.patch.object(backend, "_readActiveTaskItems", return_value=[]), \
+			mock.patch.object(backend, "_checkTaskCompletions", return_value=0), \
+			mock.patch.object(backend, "_resolveTranscriptPath", return_value=None), \
+			mock.patch.object(self.plugin.ui, "message", side_effect=messages.append):
+			backend._autoReadCheck()
+			backend._autoReadCheck()
+		self.assertEqual(messages, ["Codex task finished: Migrated — P. Done"])
+
 	def test_codex_monitor_owns_periodic_timer_until_termination(self):
 		backend = self.plugin.ChatGPTBackend()
 		timer = backend._autoReadTimer
@@ -987,7 +1023,10 @@ class UsageLimitsTests(unittest.TestCase):
 		self.assertIn("5-hour limit reached", message)
 
 	def test_format_reset_time_uses_full_date_for_weekly_window(self):
-		text = self.plugin._formatResetTime(1778611314, self.plugin.WEEKLY_WINDOW_MINS)
+		from datetime import datetime
+		with mock.patch.object(self.plugin, "datetime") as clock:
+			clock.fromtimestamp.return_value = datetime(2026, 5, 12, 12, 41)
+			text = self.plugin._formatResetTime(1778611314, self.plugin.WEEKLY_WINDOW_MINS)
 
 		self.assertEqual(text, "Tuesday, May 12, 2026 12:41 PM")
 
