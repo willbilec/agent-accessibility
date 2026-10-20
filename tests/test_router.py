@@ -94,6 +94,27 @@ class RouterTests(unittest.TestCase):
         )
         self.assertEqual(self.router.route_message_command(), "hermes")
 
+    def test_routes_terminal_agents_without_matching_browser_titles(self):
+        titles = {'Codex — task': 'codexcli', 'muse-cli': 'museai', 'musecli — main': 'museai'}
+        for title, expected in titles.items():
+            with self.subTest(title=title):
+                self.router.reset_cache()
+                self.router.api.getForegroundObject = lambda: _foreground(
+                    'WindowsTerminal', r'C:\Windows\WindowsTerminal.exe', title=title)
+                self.assertEqual(self.router.route(), expected)
+                self.router.reset_cache()
+                self.router.api.getForegroundObject = lambda: _foreground(
+                    'msedge', r'C:\Program Files\msedge.exe', title=title)
+                self.assertIsNone(self.router.route())
+
+
+
+    def test_unavailable_muse_cli_never_routes_to_muse_code(self):
+        self.router.api.getForegroundObject = lambda: _foreground(
+            'WindowsTerminal', r'C:\Windows\WindowsTerminal.exe', title='muse-cli')
+        expected = self.router._TERMINAL_TRANSCRIPT_SOURCES.get('muse-cli')
+        self.assertEqual(self.router.route(), expected)
+
 
 if __name__ == "__main__":
     unittest.main()
